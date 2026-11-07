@@ -343,9 +343,23 @@ with tab1:
             else:
                 st.info("برای ذخیره در تاریخچه، یک اسم برای آگهی بنویس.")
 
+        # پرامپت آماده برای کپی در هر چت‌بات (بدون نیاز به API)
+        stats_txt = (f"بازدید {views}، باز شدن {opens}، تماس {calls}، "
+                     f"پیام {msgs}")
+        _p = build_prompt(stats_txt, price, market, title, desc, issues, [])
+        manual = (_p.split("فقط یک JSON معتبر برگردان")[0]
+                  + "پاسخ را با عنوان‌های مرتب و خوانا به فارسی بنویس. "
+                    "اگر عکس‌هایی همراه این پیام فرستادم، آن‌ها را هم بررسی کن.")
+        with st.expander("📋 پرامپت آماده (کپی در Claude یا هر چت‌بات)",
+                         expanded=not (secret("GEMINI_API_KEY")
+                                       or secret("ANTHROPIC_API_KEY"))):
+            st.code(manual, language=None)
+            st.caption("با دکمه‌ی کپی بالا سمت راست کادر کپی کن. "
+                       "اگر عکس داری، خودت داخل چت‌بات هم آپلود کن.")
+
         if title.strip() or desc.strip():
             if not (secret("GEMINI_API_KEY") or secret("ANTHROPIC_API_KEY")):
-                st.error("کلید API تنظیم نشده (GEMINI_API_KEY).")
+                st.info("کلید API تنظیم نشده؛ از پرامپت آماده‌ی بالا استفاده کن.")
             else:
                 stats = (f"بازدید {views}، باز شدن {opens}، تماس {calls}، "
                          f"پیام {msgs}")
