@@ -170,16 +170,7 @@ def analyze(views, opens, calls, msgs, price, market,
 
 
 # ---------- بررسی عنوان، توضیحات و عکس با هوش مصنوعی ----------
-def ai_review(stats, price, market, title, desc, issues, images):
-    import anthropic
-    client = anthropic.Anthropic(api_key=secret("ANTHROPIC_API_KEY"))
-
-    content = []
-    for img in images:
-        content.append({"type": "image", "source": {
-            "type": "base64", "media_type": img.type,
-            "data": base64.b64encode(img.getvalue()).decode()}})
-
+def build_prompt(stats, price, market, title, desc, issues, images):
     prompt = f"""تو کارشناس آگهی‌های مالکی در دیوار هستی.
 
 آمار آگهی: {stats}
@@ -210,17 +201,56 @@ def ai_review(stats, price, market, title, desc, issues, images):
 "image_review": "", "suggested_titles": ["","","","",""],
 "suggested_description": ""}}
 اگر بخشی قابل ارزیابی نبود، رشته‌ی خالی بگذار. همه‌چیز به فارسی."""
-    content.append({"type": "text", "text": prompt})
+    return prompt
 
-    resp = client.messages.create(
-        model=MODEL, max_tokens=3000,
-        messages=[{"role": "user", "content": content}])
-    raw = resp.content[0].text
+
+def parse_json(raw):
     clean = re.sub(r"```json|```", "", raw).strip()
     try:
         return json.loads(clean)
     except Exception:
         return {"raw": raw}
+
+
+def ai_review_claude(prompt, images):
+    import anthropic
+    client = anthropic.Anthropic(api_key=secret("ANTHROPIC_API_KEY"))
+    content = []
+    for img in images:
+        content.append({"type": "image", "source": {
+            "type": "base64", "media_type": img.type,
+            "data": base64.b64encode(img.getvalue()).decode()}})
+    content.append({"type": "text", "text": prompt})
+    resp = client.messages.create(
+        model=MODEL, max_tokens=3000,
+        messages=[{"role": "user", "content": content}])
+    return parse_json(resp.content[0].text)
+
+
+def ai_review_gemini(prompt, images):
+    model = secret("GEMINI_MODEL") or "gemini-flash-latest"
+    parts = [{"inline_data": {
+        "mime_type": img.type,
+        "data": base64.b64encode(img.getvalue()).decode()}} for img in images]
+    parts.append({"text": prompt})
+    r = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        headers={"x-goog-api-key": secret("GEMINI_API_KEY"),
+                 "Content-Type": "application/json"},
+        json={"contents": [{"parts": parts}],
+              "generationConfig": {"responseMimeType": "application/json"}},
+        timeout=90)
+    r.raise_for_status()
+    out = r.json()["candidates"][0]["content"]["parts"]
+    raw = "".join(p.get("text", "") for p in out)
+    return parse_json(raw)
+
+
+def ai_review(stats, price, market, title, desc, issues, images):
+    prompt = build_prompt(stats, price, market, title, desc, issues, images)
+    if secret("GEMINI_API_KEY"):
+        return ai_review_gemini(prompt, images)
+    return ai_review_claude(prompt, images)
 
 
 # ---------- نوار کناری ----------
@@ -230,9 +260,9 @@ with st.sidebar:
     min_contact = st.number_input("حداقل نرخ تماس+پیام (%)", value=5.0) / 100
     min_views = st.number_input("حداقل بازدید برای قضاوت", value=200)
 
-    _k = secret("ANTHROPIC_API_KEY")
+    _k = secret("GEMINI_API_KEY") or secret("ANTHROPIC_API_KEY")
     st.caption("🔑 کلید: پیدا نشد" if not _k else
-               f"🔑 شروع کلید: {_k[:7]} | طول: {len(_k)}")
+               f"🔑 شروع کلید: {_k[:4]} | طول: {len(_k)}")
 
 tab1, tab2 = st.tabs(["🔍 تحلیل جدید", "📈 تاریخچه و روند"])
 
@@ -314,8 +344,8 @@ with tab1:
                 st.info("برای ذخیره در تاریخچه، یک اسم برای آگهی بنویس.")
 
         if title.strip() or desc.strip():
-            if not secret("ANTHROPIC_API_KEY"):
-                st.error("کلید API تنظیم نشده (ANTHROPIC_API_KEY).")
+            if not (secret("GEMINI_API_KEY") or secret("ANTHROPIC_API_KEY")):
+                st.error("کلید API تنظیم نشده (GEMINI_API_KEY).")
             else:
                 stats = (f"بازدید {views}، باز شدن {opens}، تماس {calls}، "
                          f"پیام {msgs}")
@@ -325,7 +355,11 @@ with tab1:
                                         issues, images[:3])
                     except Exception as e:
                         res = None
-                        st.error(f"خطا در ارتباط با هوش مصنوعی: {type(e).__name__}")
+                        detail = ""
+                        resp_ = getattr(e, "response", None)
+                        if resp_ is not None:
+                            detail = f" | کد {resp_.status_code}: {resp_.text[:300]}"
+                        st.error(f"خطا در ارتباط با هوش مصنوعی: {type(e).__name__}{detail}")
                 if res:
                     if "raw" in res:
                         st.write(res["raw"])
