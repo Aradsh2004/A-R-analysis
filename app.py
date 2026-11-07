@@ -29,7 +29,15 @@ def secret(name):
 
 # ---------- قفل با رمز ----------
 _pw = secret("APP_PASSWORD")
-if _pw and st.text_input("رمز ورود", type="password") != _pw:
+if _pw and not st.session_state.get("auth"):
+    st.subheader("🔒 ورود")
+    entered = st.text_input("رمز ورود", type="password")
+    if st.button("ورود", type="primary"):
+        if entered == _pw:
+            st.session_state.auth = True
+            st.rerun()
+        else:
+            st.error("رمز اشتباه است.")
     st.stop()
 
 
@@ -66,6 +74,58 @@ def last_row(ad_name):
     df = load_df()
     df = df[df["ad_name"] == ad_name]
     return None if df.empty else df.iloc[-1]
+
+
+# ---------- تبدیل عدد به حروف فارسی ----------
+_ONES = ["", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه", "ده",
+         "یازده", "دوازده", "سیزده", "چهارده", "پانزده", "شانزده", "هفده",
+         "هجده", "نوزده"]
+_TENS = ["", "", "بیست", "سی", "چهل", "پنجاه", "شصت", "هفتاد", "هشتاد", "نود"]
+_HUNDREDS = ["", "صد", "دویست", "سیصد", "چهارصد", "پانصد", "ششصد", "هفتصد",
+             "هشتصد", "نهصد"]
+_SCALES = ["", "هزار", "میلیون", "میلیارد", "تریلیون"]
+
+
+def _three(n):
+    parts = []
+    h, r = divmod(n, 100)
+    if h:
+        parts.append(_HUNDREDS[h])
+    if r < 20:
+        if r:
+            parts.append(_ONES[r])
+    else:
+        tens, ones = divmod(r, 10)
+        parts.append(_TENS[tens])
+        if ones:
+            parts.append(_ONES[ones])
+    return " و ".join(parts)
+
+
+def number_to_words(n):
+    n = int(n)
+    if n == 0:
+        return "صفر"
+    groups, i = [], 0
+    while n and i < len(_SCALES):
+        n, g = divmod(n, 1000)
+        if g:
+            groups.append((g, i))
+        i += 1
+    if n:
+        return ""
+    out = []
+    for g, i in reversed(groups):
+        w = _three(g)
+        out.append(w + (" " + _SCALES[i] if _SCALES[i] else ""))
+    return " و ".join(out)
+
+
+def money_caption(n):
+    if not n:
+        return ""
+    w = number_to_words(n)
+    return f"{n:,} تومان" + (f" — {w} تومان" if w else "")
 
 
 # ---------- محاسبه نرخ‌ها ----------
@@ -174,7 +234,7 @@ def build_prompt(stats, price, market, title, desc, issues, images):
     prompt = f"""تو کارشناس آگهی‌های مالکی در دیوار هستی.
 
 آمار آگهی: {stats}
-قیمت آگهی: {price} | قیمت مشابه‌های بازار: {market}
+قیمت آگهی: {price} | قیمت مشابه‌های بازار: {market if market else 'نامشخص (آگهی مشابه پیدا نشد؛ درباره‌ی قیمت نظر نده)'}
 مشکلات تشخیص‌داده‌شده از روی آمار:
 {chr(10).join(issues)}
 
@@ -288,8 +348,15 @@ with tab1:
     p1, p2 = st.columns(2)
     price = p1.number_input("قیمت آگهی شما (تومان)", min_value=0,
                             step=1000000, key="price")
+    p1.caption(money_caption(price))
     market = p2.number_input("قیمت مشابه‌های بازار (تومان)", min_value=0,
-                             step=1000000)
+                             step=1000000,
+                             disabled=st.session_state.get("no_market", False))
+    no_market = p2.checkbox("آگهی مشابه ندیدم", key="no_market")
+    if no_market:
+        market = 0
+    else:
+        p2.caption(money_caption(market))
 
     images = st.file_uploader("عکس‌های آگهی (حداکثر ۳ تا، اختیاری)",
                               type=["jpg", "jpeg", "png", "webp"],
