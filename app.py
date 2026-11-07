@@ -21,9 +21,10 @@ st.title("📊 تحلیل آگهی دیوار")
 
 def secret(name):
     try:
-        return st.secrets[name]
+        val = st.secrets[name]
     except Exception:
-        return os.getenv(name)
+        val = os.getenv(name)
+    return val.strip() if isinstance(val, str) else val
 
 
 # ---------- قفل با رمز ----------
@@ -228,6 +229,10 @@ with st.sidebar:
     min_open = st.number_input("حداقل نرخ باز شدن (%)", value=4.0) / 100
     min_contact = st.number_input("حداقل نرخ تماس+پیام (%)", value=5.0) / 100
     min_views = st.number_input("حداقل بازدید برای قضاوت", value=200)
+
+    _k = secret("ANTHROPIC_API_KEY")
+    st.caption("🔑 کلید: پیدا نشد" if not _k else
+               f"🔑 شروع کلید: {_k[:7]} | طول: {len(_k)}")
 
 tab1, tab2 = st.tabs(["🔍 تحلیل جدید", "📈 تاریخچه و روند"])
 
