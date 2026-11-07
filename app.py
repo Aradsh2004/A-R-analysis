@@ -51,21 +51,22 @@ def db():
         title TEXT, url TEXT)""")
     have = {r[1] for r in conn.execute("PRAGMA table_info(history)")}
     for col, typ in [("pub_date", "TEXT"), ("upd_date", "TEXT"),
-                     ("days_active", "INTEGER")]:
+                     ("days_active", "INTEGER"), ("saves", "INTEGER")]:
         if col not in have:
             conn.execute(f"ALTER TABLE history ADD COLUMN {col} {typ}")
     return conn
 
 
 def save_row(ad_name, views, opens, calls, msgs, price, title, url,
-             pub_date="", upd_date="", days_active=0):
+             pub_date="", upd_date="", days_active=0, saves=0):
     conn = db()
     conn.execute(
         "INSERT INTO history (ts, ad_name, views, opens, calls, msgs, price, "
-        "title, url, pub_date, upd_date, days_active) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "title, url, pub_date, upd_date, days_active, saves) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (now_ir().strftime("%Y-%m-%d %H:%M"), ad_name, views, opens,
-         calls, msgs, price, title, url, pub_date, upd_date, days_active))
+         calls, msgs, price, title, url, pub_date, upd_date, days_active,
+         saves))
     conn.commit()
     conn.close()
 
@@ -313,7 +314,8 @@ def price_issues(price, market):
 
 
 def analyze(views, opens, calls, msgs, price, market,
-            min_open, min_contact, min_views, days=1, min_daily=20):
+            min_open, min_contact, min_views, days=1, min_daily=20,
+            saves=0, min_save=0.02):
     if views < min_views:
         return ["بازدید هنوز برای قضاوت کافی نیست. چند روز صبر کن یا آگهی را نردبان کن."]
     issues = []
@@ -333,6 +335,17 @@ def analyze(views, opens, calls, msgs, price, market,
             f"نرخ تماس/پیام پایین است ({contact_rate:.1%}): "
             "مردم آگهی را باز می‌کنند ولی اقدام نمی‌کنند. متن، توضیحات، "
             "عکس‌های داخل آگهی یا قیمت را بررسی کن.")
+    if opens:
+        save_rate = saves / opens
+        if save_rate < min_save:
+            issues.append(
+                f"نرخ ذخیره پایین است ({save_rate:.1%}): "
+                "آگهی برای بیننده جذابیت کافی ندارد؛ عنوان، عکس اول و مزیت اصلی را تقویت کن.")
+        elif contact_rate < min_contact:
+            issues.append(
+                f"ذخیره خوب است ({save_rate:.1%}) ولی تماس/پیام کم است: "
+                "مخاطب علاقه‌مند ولی مردد است. قیمت، اعتمادسازی، امکان مذاکره "
+                "و دعوت به اقدام در متن را بررسی کن.")
     if opens and calls and not msgs:
         issues.append("پیام صفر است؛ شاید چت فعال نیست یا مخاطب فقط تماس را ترجیح می‌دهد.")
     if opens and msgs and not calls:
@@ -356,6 +369,7 @@ def build_prompt(stats, price, market, title, desc, issues, images,
         context = f"""وضعیت: آگهی منتشر شده است.
 زمان‌بندی: {timing}
 آمار آگهی: {stats}
+توجه: «ذخیره» یعنی چند نفر آگهی را نشان کرده‌اند. ذخیره‌ی زیاد با تماس کم یعنی مخاطب علاقه‌مند ولی مردد است (قیمت، اعتماد، مذاکره)، و ذخیره‌ی کم یعنی آگهی جذابیت کافی ندارد. این را در تحلیل لحاظ کن.
 مشکلات تشخیص‌داده‌شده از روی آمار:
 {notes}"""
         tasks = """۱. عنوان فعلی را نقد کن (وضوح، کلمات کلیدی، جذابیت).
@@ -464,6 +478,7 @@ with st.sidebar:
     min_contact = st.number_input("حداقل نرخ تماس+پیام (%)", value=5.0) / 100
     min_views = st.number_input("حداقل بازدید برای قضاوت", value=200)
     min_daily = st.number_input("حداقل بازدید روزانه", value=20)
+    min_save = st.number_input("حداقل نرخ ذخیره (%)", value=2.0) / 100
 
     _k = secret("GEMINI_API_KEY") or secret("ANTHROPIC_API_KEY")
     st.caption("🔑 کلید: پیدا نشد" if not _k else
@@ -524,7 +539,7 @@ def show_result(res):
 
 def analysis_ui(published, ad_name, title, desc, views, opens, calls, msgs,
                 price, market, images, save_it, pub_date, upd_date,
-                pub_j, upd_j, basis, today):
+                pub_j, upd_j, basis, today, saves=0):
     timing = ""
     days_eff = 0
     if published:
@@ -540,23 +555,26 @@ def analysis_ui(published, ad_name, title, desc, views, opens, calls, msgs,
                   f"باز شدن {opens / days_eff:.1f}، "
                   f"تماس+پیام {(calls + msgs) / days_eff:.1f}.")
         issues = analyze(views, opens, calls, msgs, price, market,
-                         min_open, min_contact, min_views, days_eff, min_daily)
+                         min_open, min_contact, min_views, days_eff, min_daily,
+                         saves, min_save)
         open_rate, contact_rate = rates(views, opens, calls, msgs)
 
         st.subheader("خلاصه‌ی زمانی")
         st.write(timing)
-        e1, e2, e3 = st.columns(3)
+        e1, e2, e3, e4 = st.columns(4)
         e1.metric("بازدید روزانه", f"{views / days_eff:.1f}")
         e2.metric("باز شدن روزانه", f"{opens / days_eff:.1f}")
         e3.metric("تماس+پیام روزانه", f"{(calls + msgs) / days_eff:.1f}")
+        e4.metric("ذخیره (کل)", f"{saves}")
 
         st.subheader("قیف آگهی")
         funnel = pd.DataFrame({"تعداد": [views, opens, calls + msgs]},
                               index=["بازدید", "باز شدن", "تماس + پیام"])
         st.bar_chart(funnel)
-        m1, m2 = st.columns(2)
+        m1, m2, m3 = st.columns(3)
         m1.metric("نرخ باز شدن", f"{open_rate:.1%}")
         m2.metric("نرخ تماس+پیام", f"{contact_rate:.1%}")
+        m3.metric("نرخ ذخیره", f"{(saves / opens if opens else 0):.1%}")
 
         if ad_name.strip():
             prev = last_row(ad_name.strip())
@@ -585,12 +603,12 @@ def analysis_ui(published, ad_name, title, desc, views, opens, calls, msgs,
         if save_it:
             if ad_name.strip():
                 save_row(ad_name.strip(), views, opens, calls, msgs, price,
-                         title, st.session_state.url, pub_j, upd_j, days_eff)
+                         title, st.session_state.url, pub_j, upd_j, days_eff, saves)
                 st.success("در تاریخچه ذخیره شد.")
             else:
                 st.info("برای ذخیره در تاریخچه، یک اسم برای آگهی بنویس.")
         stats_txt = (f"بازدید {views}، باز شدن {opens}، تماس {calls}، "
-                     f"پیام {msgs}")
+                     f"پیام {msgs}، ذخیره (نشان کردن) {saves}")
     else:
         issues = price_issues(price, market) or ["مشکل مشخصی در مقایسه‌ی قیمت دیده نشد."]
         st.subheader("بررسی اولیه")
@@ -654,7 +672,7 @@ with tab1:
     desc = st.text_area("توضیحات آگهی", key="desc", height=180)
 
     today = now_ir().date()
-    views = opens = calls = msgs = 0
+    views = opens = calls = msgs = saves = 0
     pub_j = upd_j = ""
     pub_date = upd_date = None
     basis = "از تاریخ انتشار"
@@ -690,6 +708,7 @@ with tab1:
         opens = c2.number_input("باز شدن آگهی", min_value=0, step=1)
         calls = c1.number_input("تماس", min_value=0, step=1)
         msgs = c2.number_input("پیام", min_value=0, step=1)
+        saves = c1.number_input("ذخیره شدن آگهی (نشان کردن)", min_value=0, step=1)
 
     p1, p2 = st.columns(2)
     price = p1.number_input("قیمت آگهی شما (تومان)", min_value=0,
@@ -717,7 +736,7 @@ with tab1:
         else:
             analysis_ui(published, ad_name, title, desc, views, opens, calls,
                         msgs, price, market, images, save_it, pub_date,
-                        upd_date, pub_j, upd_j, basis, today)
+                        upd_date, pub_j, upd_j, basis, today, saves)
 
 # =====================================================
 with tab2:
